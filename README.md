@@ -6,8 +6,9 @@ regions of a protein, across all its orthologs**.
 Given a UniProt accession (or gene name, or raw sequence), the tool:
 
 1. assembles the relevant sequences — **by default the curated reviewed orthologs** of the
-   query's protein family (from UniProt), each aligned to the query; or, optionally, a broad
-   **ColabFold MMseqs2** homology MSA (`--source msa`);
+   query's protein family (from UniProt), combined into a true **multiple sequence alignment**
+   (FAMSA, in-process); or, optionally, a broad **ColabFold MMseqs2** homology MSA
+   (`--source msa`);
 2. finds every **experimental PDB** structure for each sequence (PDBe SIFTS);
 3. determines which residues are actually **modelled** — observed in the density, not just
    present in SEQRES (disordered/missing residues don't count);
@@ -59,6 +60,7 @@ Useful flags:
 |---|---|
 | `--source orthologs\|msa` | row source: curated UniProt orthologs (default) or ColabFold MMseqs2 |
 | `--max-orthologs N` | max reviewed family members to fetch in ortholog mode (default 500) |
+| `--ortholog-aligner famsa\|pairwise` | ortholog-mode alignment: one true FAMSA MSA (default) or star (each aligned to the query) |
 | `--formats html,image,data` | which outputs to write (default: all) |
 | `--email you@example.org` | contact sent to EBI/ColabFold (etiquette; recommended) |
 | `--reviewed-only` | keep only reviewed (Swiss-Prot) hits — drops uncharacterised TrEMBL noise |
@@ -83,7 +85,7 @@ Useful flags:
 ## How it works
 
 ```
-                ┌─ default: UniProt reviewed family orthologs ─▶ pairwise-align to query
+                ┌─ default: UniProt reviewed family orthologs ─▶ FAMSA multiple alignment
 input ─▶ query ─┤
                 └─ --source msa: ColabFold MMseqs2 homology search ─▶ query-anchored a3m
       ─▶ UniProt metadata (organism/gene/PDB existence, batched)

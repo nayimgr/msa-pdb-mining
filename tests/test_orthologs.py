@@ -1,5 +1,9 @@
 from msa_pdb_mining.msa.a3m import match_columns, ungapped
-from msa_pdb_mining.orthologs import a3m_from_pairwise, parse_orthologs
+from msa_pdb_mining.orthologs import (
+    a3m_from_aligned,
+    a3m_from_pairwise,
+    parse_orthologs,
+)
 
 QUERY = "ACDEFGHIK"
 
@@ -14,6 +18,45 @@ def test_a3m_from_pairwise_handles_insertion_and_deletion():
     # query-anchored projection has exactly len(query) columns
     assert len(match_columns(a3m)) == len(QUERY)
     # ungapped row equals the full ortholog sequence -> offset detection stays exact
+    assert ungapped(a3m) == o_seq
+
+
+def test_a3m_from_aligned_handles_insertion_and_deletion():
+    # one row of a true MSA: query gapped where the ortholog inserts QQ; ortholog
+    # gapped (deletion) where the query has I.
+    q_aln = "ACD--EFGHIK"
+    o_aln = "ACDQQEFGH-K"
+    o_seq = "ACDQQEFGHK"
+    a3m = a3m_from_aligned(q_aln, o_aln, o_seq)
+    # same query-anchored A3M the pairwise engine would yield for this block
+    assert a3m == "ACDqqEFGH-K"
+    assert len(match_columns(a3m)) == len(QUERY)
+    assert ungapped(a3m) == o_seq
+
+
+def test_a3m_from_aligned_takes_residues_from_original_not_aligner():
+    # the aligner may normalise a non-standard residue (U -> X); the gap pattern is
+    # what we trust, but each residue must come from the original sequence so the
+    # row's ungapped form still matches the UniProt sequence.
+    q_aln = "ACDEF"
+    o_aln = "ACXEF"  # aligner emitted X at the non-standard position
+    o_seq = "ACUEF"  # real residue is selenocysteine U
+    a3m = a3m_from_aligned(q_aln, o_aln, o_seq)
+    assert a3m == "ACUEF"
+    assert ungapped(a3m) == o_seq
+
+
+def test_a3m_from_aligned_drops_columns_where_both_are_gapped():
+    # a multiple alignment can leave columns where neither this row nor the query
+    # has a residue (another family member's insertion); they contribute nothing.
+    q_aln = "AC--DEF"
+    o_aln = "AG-WDEF"
+    o_seq = "AGWDEF"
+    a3m = a3m_from_aligned(q_aln, o_aln, o_seq)
+    # col0 A/A match -> 'A'; col1 C/G match -> 'G'; col2 -/- both gapped -> dropped;
+    # col3 -/W query-gap insertion -> 'w'; cols D/E/F match -> 'DEF'
+    assert a3m == "AGwDEF"
+    assert len(match_columns(a3m)) == len("ACDEF")
     assert ungapped(a3m) == o_seq
 
 

@@ -200,6 +200,7 @@ def run_pipeline(
 
     params = {
         "source": source_label,
+        "ortholog_aligner": config.ortholog_aligner if config.source == "orthologs" else None,
         "colabfold_mode": config.colabfold_mode if config.source == "msa" else None,
         "reviewed_only": config.reviewed_only,
         "max_structured_rows": config.max_structured_rows,

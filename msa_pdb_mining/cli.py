@@ -32,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-orthologs", type=int, default=500,
         help="Max reviewed family members to fetch in ortholog mode (default: 500)",
     )
+    p.add_argument(
+        "--ortholog-aligner", choices=["famsa", "pairwise"], default="famsa",
+        help="Ortholog-mode alignment engine: 'famsa' = one true multiple alignment "
+        "of query + orthologs (default); 'pairwise' = star (each aligned to the query)",
+    )
     p.add_argument("--organism", help="Organism for --gene: NCBI taxid or name (default: 9606)")
     p.add_argument("--name", help="Display name when using --sequence")
     p.add_argument("--out", "-o", default="results", help="Output directory (default: results)")
@@ -83,6 +88,7 @@ def main(argv=None) -> int:
         use_cache=not args.no_cache,
         source=args.source,
         max_orthologs=args.max_orthologs,
+        ortholog_aligner=args.ortholog_aligner,
         colabfold_mode=args.mode,
         include_env_hits=args.include_env,
         reviewed_only=args.reviewed_only,

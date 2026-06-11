@@ -34,6 +34,11 @@ class Config:
     # "msa": ColabFold MMseqs2 homology search (broad homologs; folding-style).
     source: str = "orthologs"
     max_orthologs: int = 500
+    # Ortholog-mode alignment engine:
+    #   "famsa"    – one true multiple alignment of the query + all orthologs
+    #                (pyfamsa, in-process); family-aware columns. Default.
+    #   "pairwise" – each ortholog aligned to the query independently (star).
+    ortholog_aligner: str = "famsa"
 
     # --- MSA backend (ColabFold MMseqs2) ---
     colabfold_host: str = COLABFOLD_HOST
