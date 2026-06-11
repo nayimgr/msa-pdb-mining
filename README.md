@@ -6,9 +6,9 @@ regions of a protein, across all its orthologs**.
 Given a UniProt accession (or gene name, or raw sequence), the tool:
 
 1. assembles the relevant sequences — **by default the curated reviewed orthologs** of the
-   query's protein family (from UniProt), combined into a true **multiple sequence alignment**
-   (FAMSA, in-process); or, optionally, a broad **ColabFold MMseqs2** homology MSA
-   (`--source msa`);
+   query, taken from its UniProt **orthology groups** (OrthoDB, eggNOG, PANTHER, GeneTree,
+   OMA), combined into a true **multiple sequence alignment** (FAMSA, in-process); or,
+   optionally, a broad **ColabFold MMseqs2** homology MSA (`--source msa`);
 2. finds every **experimental PDB** structure for each sequence (PDBe SIFTS);
 3. determines which residues are actually **modelled** — observed in the density, not just
    present in SEQRES (disordered/missing residues don't count);
@@ -19,7 +19,12 @@ Given a UniProt accession (or gene name, or raw sequence), the tool:
 > database and deliberately filters out redundant near-identical sequences, so curated
 > Swiss-Prot orthologs (mouse, rat, …) are largely absent. For "what structural data exists
 > across the orthologs", you want completeness per species — so the default pulls the reviewed
-> family members straight from UniProt. Use `--source msa` for broad/distant homology instead.
+> members of the query's **orthology groups** straight from UniProt. Crucially this is true
+> orthology (OrthoDB/eggNOG/PANTHER/…), **not** the free-text "Belongs to the … family"
+> annotation: the family text conflates evolutionary orthologs with same-family *interactors*
+> and unrelated members — e.g. it files several species' **STN1** under the *CTC1* family, so a
+> family search for CTC1 wrongly drags in its CST-complex partner — whereas no orthology group
+> does. Use `--source msa` for broad/distant homology instead.
 
 Glance at the result and immediately see which parts of your protein are structurally
 characterised (in itself or any ortholog) and which are blind spots.
@@ -59,7 +64,7 @@ Useful flags:
 | flag | meaning |
 |---|---|
 | `--source orthologs\|msa` | row source: curated UniProt orthologs (default) or ColabFold MMseqs2 |
-| `--max-orthologs N` | max reviewed family members to fetch in ortholog mode (default 500) |
+| `--max-orthologs N` | max reviewed orthology-group members to fetch in ortholog mode (default 500) |
 | `--ortholog-aligner famsa\|pairwise` | ortholog-mode alignment: one true FAMSA MSA (default) or star (each aligned to the query) |
 | `--formats html,image,data` | which outputs to write (default: all) |
 | `--email you@example.org` | contact sent to EBI/ColabFold (etiquette; recommended) |
@@ -85,7 +90,7 @@ Useful flags:
 ## How it works
 
 ```
-                ┌─ default: UniProt reviewed family orthologs ─▶ FAMSA multiple alignment
+                ┌─ default: UniProt orthology-group orthologs ─▶ FAMSA multiple alignment
 input ─▶ query ─┤
                 └─ --source msa: ColabFold MMseqs2 homology search ─▶ query-anchored a3m
       ─▶ UniProt metadata (organism/gene/PDB existence, batched)
@@ -106,8 +111,10 @@ future local engines; the ortholog path lives in `msa_pdb_mining/orthologs.py`.
 ## Status
 
 Implemented: `--uniprot` / `--gene` / `--sequence`; **curated UniProt ortholog source
-(default)** and ColabFold MMseqs2 source (`--source msa`); experimental-PDB observed-residue
-depth; HTML + image + data outputs; caching of all API responses.
+(default)** — orthologs taken from the query's OrthoDB/eggNOG/PANTHER/GeneTree/OMA orthology
+groups (true orthology, not the SIMILARITY family text) — and ColabFold MMseqs2 source
+(`--source msa`); experimental-PDB observed-residue depth; HTML + image + data outputs;
+caching of all API responses.
 
-Planned: OrthoDB/OMA true-ortholog source and explicit species lists; pluggable local MSA
-backends; optional AlphaFold/computed-model coverage.
+Planned: explicit species lists; pluggable local MSA backends; optional AlphaFold/computed-model
+coverage; sequence-search fallback for hits without a UniProt accession.

@@ -2,10 +2,25 @@
 
 The ColabFold folding-MSA filters out redundant near-identical orthologs and
 returns UniRef cluster representatives, so curated Swiss-Prot orthologs (mouse,
-rat, ...) are largely absent. This module instead pulls the reviewed members of
-the query's protein family directly from UniProt and aligns them, guaranteeing
-the curated orthologs appear. (Close paralogs sharing the family — e.g. p63/p73
-for p53 — are included too, distinguishable by gene name.)
+rat, ...) are largely absent. This module instead pulls reviewed orthologs of the
+query directly from UniProt and aligns them, guaranteeing the curated orthologs
+appear.
+
+**Orthologs, not "family".** Orthologs are identified by shared membership in
+true **orthology groups** — OrthoDB, eggNOG, PANTHER, GeneTree, OMA
+(``Config.ortholog_xref_dbs``) — read straight off the query's UniProt entry, not
+from the free-text SIMILARITY "Belongs to the ... family" comment. The family
+text conflates evolutionary orthologs with same-family interactors and unrelated
+members: e.g. UniProt files several species' **STN1** (a CST-complex *interactor*
+of CTC1) under the "CTC1 family", so a ``family:`` search for CTC1 wrongly pulls
+them in, whereas no orthology group does. We read the query's group id in each
+listed db, then ask UniProt for every reviewed entry sharing *any* of those groups
+in one OR query (UniProt dedups by entry); the union maximises ortholog recall
+across databases while excluding non-orthologs. Close paralogs that genuine
+orthology groups place together (e.g. p63/p73 with p53 in a PANTHER family) are
+still included, distinguishable by gene name. If the query has no orthology xref
+at all we fall back to a gene-name search, then to the family text as a last
+resort.
 
 Two alignment engines, selected by ``Config.ortholog_aligner``:
   * ``"famsa"`` (default) — one **true multiple alignment** of the query plus
@@ -24,7 +39,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import httpx
 from Bio.Align import PairwiseAligner, substitution_matrices
@@ -51,7 +66,83 @@ class Ortholog:
     pdb_ids: Set[str]
 
 
-# --- family resolution ---
+# --- ortholog-group resolution ---
+def _search_token(database: str) -> str:
+    """UniProtKB DR-line db name -> the token in a ``xref:<token>-<id>`` search.
+
+    All current orthology dbs lower-case cleanly ("OrthoDB" -> "orthodb",
+    "GeneTree" -> "genetree", "eggNOG" -> "eggnog").
+    """
+    return database.lower()
+
+
+def extract_ortholog_groups(
+    entry: dict, databases: Iterable[str]
+) -> List[Tuple[str, str]]:
+    """``(search_token, group_id)`` pairs for the query's orthology groups.
+
+    Pure: reads ``uniProtKBCrossReferences`` of a parsed UniProt entry, keeping
+    only the cross-references we treat as orthology groups (``databases``). A
+    PANTHER id carries an optional ``:SF`` subfamily suffix (``PTHR14865:SF2``);
+    we keep the family id (``PTHR14865``) — it is the group-expandable token, and
+    the colon would otherwise break the Lucene query. Duplicates are dropped,
+    order preserved.
+    """
+    wanted = set(databases)
+    seen: Set[Tuple[str, str]] = set()
+    out: List[Tuple[str, str]] = []
+    for xref in entry.get("uniProtKBCrossReferences", []):
+        db = xref.get("database")
+        if db not in wanted:
+            continue
+        gid = (xref.get("id") or "").split(":", 1)[0].strip()
+        if not gid:
+            continue
+        pair = (_search_token(db), gid)
+        if pair not in seen:
+            seen.add(pair)
+            out.append(pair)
+    return out
+
+
+def build_group_query(groups: List[Tuple[str, str]]) -> str:
+    """OR the per-group clauses into one reviewed-only UniProt query.
+
+    UniProt dedups by entry, so a single search returns the union of every
+    orthology group's members exactly once — no client-side merge needed.
+    """
+    clauses = " OR ".join(f"xref:{token}-{gid}" for token, gid in groups)
+    return f"({clauses}) AND reviewed:true"
+
+
+def fetch_query_ortholog_groups(
+    client: httpx.Client, cache: DiskCache, config: Config, accession: str
+) -> List[Tuple[str, str]]:
+    """Orthology-group ``(token, id)`` pairs for the query, from its UniProt entry.
+
+    Fetches the full entry JSON (a ``fields=xref_*`` filter does *not* populate
+    ``uniProtKBCrossReferences``) and projects it through
+    :func:`extract_ortholog_groups`. Cached per accession.
+    """
+    cached = cache.get_json("ortholog_groups", accession)
+    if cached is not None:
+        return [(t, g) for t, g in cached.get("groups", [])]
+
+    groups: List[Tuple[str, str]] = []
+    resp = request(
+        client, "GET", f"{config.uniprot_rest}/uniprotkb/{accession}.json",
+        headers={"Accept": "application/json"},
+    )
+    if resp is not None and resp.status_code < 400:
+        try:
+            groups = extract_ortholog_groups(resp.json(), config.ortholog_xref_dbs)
+        except ValueError:  # malformed JSON
+            pass
+    cache.set_json("ortholog_groups", accession, {"groups": [list(p) for p in groups]})
+    return groups
+
+
+# --- family resolution (last-resort fallback only) ---
 def fetch_query_family(
     client: httpx.Client, cache: DiskCache, config: Config, accession: str
 ) -> Optional[str]:
@@ -112,13 +203,30 @@ def parse_orthologs(text: str, exclude: Optional[str]) -> List[Ortholog]:
 def fetch_reviewed_orthologs(
     client: httpx.Client, cache: DiskCache, config: Config, query: Query
 ) -> List[Ortholog]:
-    family = fetch_query_family(client, cache, config, query.accession) if query.accession else None
-    if family:
-        uq = f'family:"{family}" AND reviewed:true'
+    groups = (
+        fetch_query_ortholog_groups(client, cache, config, query.accession)
+        if query.accession else []
+    )
+    if groups:
+        uq = build_group_query(groups)
+        log.info("Ortholog groups (%d): %s", len(groups),
+                 ", ".join(f"{t}:{g}" for t, g in groups))
     elif query.gene:
+        # No orthology xref on the entry: the gene symbol is a reasonable proxy
+        # and, unlike the family text, will not sweep in differently-named
+        # interactors (STN1 has its own symbol, so it never matches gene:CTC1).
         uq = f"gene:{query.gene} AND reviewed:true"
+    elif query.accession:
+        # True last resort: the free-text protein family, which *can* include
+        # non-orthologs — hence only when nothing better exists.
+        family = fetch_query_family(client, cache, config, query.accession)
+        if not family:
+            raise ValueError("No orthology group, gene, or family found for the query")
+        log.warning("No orthology cross-reference for %s; falling back to family:%r",
+                    query.accession, family)
+        uq = f'family:"{family}" AND reviewed:true'
     else:
-        raise ValueError("Ortholog mode needs a UniProt accession or gene to define the family")
+        raise ValueError("Ortholog mode needs a UniProt accession or gene")
     log.info("Ortholog UniProt query: %s", uq)
 
     text = cache.get_text("orthologs", uq)

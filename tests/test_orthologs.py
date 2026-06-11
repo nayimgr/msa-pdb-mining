@@ -2,6 +2,8 @@ from msa_pdb_mining.msa.a3m import match_columns, ungapped
 from msa_pdb_mining.orthologs import (
     a3m_from_aligned,
     a3m_from_pairwise,
+    build_group_query,
+    extract_ortholog_groups,
     parse_orthologs,
 )
 
@@ -87,3 +89,47 @@ def test_parse_orthologs_excludes_query_and_keeps_metadata():
     assert o.gene == "Tp53"
     assert o.sequence == "MEDSQSD"
     assert o.pdb_ids == set()
+
+
+# A trimmed UniProt entry JSON (CTC1, Q2NKJ3) carrying the orthology cross-refs
+# plus an unrelated one we must ignore.
+ENTRY = {
+    "uniProtKBCrossReferences": [
+        {"database": "OrthoDB", "id": "2314520at2759"},
+        {"database": "eggNOG", "id": "ENOG502RBD3"},
+        {"database": "PANTHER", "id": "PTHR14865"},
+        {"database": "PANTHER", "id": "PTHR14865:SF2"},  # subfamily -> family id
+        {"database": "GeneTree", "id": "ENSGT00390000011553"},
+        {"database": "OMA", "id": "HTDYTPT"},
+        {"database": "PDB", "id": "6XYZ"},  # not an orthology db -> ignored
+    ]
+}
+DBS = ("OrthoDB", "eggNOG", "PANTHER", "GeneTree", "OMA")
+
+
+def test_extract_ortholog_groups_maps_tokens_and_strips_panther_subfamily():
+    groups = extract_ortholog_groups(ENTRY, DBS)
+    # PDB ignored; PANTHER family + subfamily collapse to one PTHR14865; tokens
+    # lower-cased; order preserved.
+    assert groups == [
+        ("orthodb", "2314520at2759"),
+        ("eggnog", "ENOG502RBD3"),
+        ("panther", "PTHR14865"),
+        ("genetree", "ENSGT00390000011553"),
+        ("oma", "HTDYTPT"),
+    ]
+
+
+def test_extract_ortholog_groups_respects_db_selection():
+    groups = extract_ortholog_groups(ENTRY, ("OrthoDB",))
+    assert groups == [("orthodb", "2314520at2759")]
+
+
+def test_extract_ortholog_groups_empty_when_no_orthology_xrefs():
+    assert extract_ortholog_groups({"uniProtKBCrossReferences": []}, DBS) == []
+    assert extract_ortholog_groups({}, DBS) == []
+
+
+def test_build_group_query_ors_clauses_and_restricts_to_reviewed():
+    q = build_group_query([("orthodb", "2314520at2759"), ("panther", "PTHR14865")])
+    assert q == "(xref:orthodb-2314520at2759 OR xref:panther-PTHR14865) AND reviewed:true"

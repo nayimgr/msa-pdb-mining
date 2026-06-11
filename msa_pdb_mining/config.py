@@ -30,10 +30,20 @@ class Config:
     use_cache: bool = True
 
     # --- MSA source ---
-    # "orthologs": curated reviewed UniProt family members aligned to the query.
+    # "orthologs": reviewed UniProt entries that share an *orthology group* with
+    #   the query (OrthoDB/eggNOG/PANTHER/...), aligned to the query. Grouping is
+    #   true orthology, not the SIMILARITY "... family" text, so evolutionary
+    #   orthologs are kept while same-family interactors/unrelated members (e.g.
+    #   STN1 under CTC1's family) are excluded.
     # "msa": ColabFold MMseqs2 homology search (broad homologs; folding-style).
     source: str = "orthologs"
     max_orthologs: int = 500
+    # Orthology cross-reference databases (UniProtKB DR-line names) whose group
+    # membership defines the query's orthologs. The query's group id in each is
+    # read from its UniProt entry, then UniProt is searched for all reviewed
+    # entries sharing any of those groups (union, deduped). Every listed db must
+    # be group-expandable via a `xref:<db>-<id>` UniProt search.
+    ortholog_xref_dbs: tuple[str, ...] = ("OrthoDB", "eggNOG", "PANTHER", "GeneTree", "OMA")
     # Ortholog-mode alignment engine:
     #   "famsa"    – one true multiple alignment of the query + all orthologs
     #                (pyfamsa, in-process); family-aware columns. Default.
