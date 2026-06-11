@@ -18,6 +18,7 @@ from .msa.colabfold import ColabFoldMMseqs2Backend
 from .net import make_client
 from .projection import build_coverage_matrix
 from .render import write_data_outputs, write_html, write_image
+from .orthologs import build_ortholog_msa
 from .structures import fetch_coverage
 from .uniprot import AccMeta, batch_lookup
 
@@ -177,25 +178,29 @@ def run_pipeline(
         log.info("Query: %s (%d aa)%s", query.name, query.length,
                  f" — {query.organism}" if query.organism else "")
 
-        log.info("Building MSA via %s ...", "ColabFold MMseqs2")
-        backend = ColabFoldMMseqs2Backend(client, cache, config)
-        a3m_text = backend.run(query.sequence)
-        msa = build_msa(query, a3m_text)
-
-        accs = unique_accessions(msa, config.max_lookup_accessions)
-        log.info("Looking up UniProt metadata for %d accessions...", len(accs))
-        meta = batch_lookup(client, cache, config, accs)
-        annotate_rows(msa, meta)
-        if config.reviewed_only:
-            msa = filter_reviewed(msa, meta)
+        if config.source == "orthologs":
+            log.info("Building curated-ortholog alignment from UniProt...")
+            msa, meta, a3m_text = build_ortholog_msa(client, cache, config, query)
+            source_label = "uniprot-orthologs"
+        else:
+            log.info("Building homology MSA via ColabFold MMseqs2...")
+            backend = ColabFoldMMseqs2Backend(client, cache, config)
+            a3m_text = backend.run(query.sequence)
+            msa = build_msa(query, a3m_text)
+            accs = unique_accessions(msa, config.max_lookup_accessions)
+            log.info("Looking up UniProt metadata for %d accessions...", len(accs))
+            meta = batch_lookup(client, cache, config, accs)
+            annotate_rows(msa, meta)
+            if config.reviewed_only:
+                msa = filter_reviewed(msa, meta)
+            source_label = backend.name
 
         coverage = collect_structures(client, cache, config, msa, meta)
         matrix = build_coverage_matrix(msa, coverage)
 
     params = {
-        "backend": backend.name,
-        "colabfold_mode": config.colabfold_mode,
-        "include_env_hits": config.include_env_hits,
+        "source": source_label,
+        "colabfold_mode": config.colabfold_mode if config.source == "msa" else None,
         "reviewed_only": config.reviewed_only,
         "max_structured_rows": config.max_structured_rows,
         "n_msa_rows": len(msa.rows),

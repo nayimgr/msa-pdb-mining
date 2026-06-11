@@ -29,6 +29,12 @@ class Config:
     cache_dir: Path = field(default_factory=_default_cache_dir)
     use_cache: bool = True
 
+    # --- MSA source ---
+    # "orthologs": curated reviewed UniProt family members aligned to the query.
+    # "msa": ColabFold MMseqs2 homology search (broad homologs; folding-style).
+    source: str = "orthologs"
+    max_orthologs: int = 500
+
     # --- MSA backend (ColabFold MMseqs2) ---
     colabfold_host: str = COLABFOLD_HOST
     # "env" searches UniRef30 + environmental DBs. We consume only the UniRef

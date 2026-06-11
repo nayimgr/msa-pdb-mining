@@ -5,12 +5,20 @@ regions of a protein, across all its orthologs**.
 
 Given a UniProt accession (or gene name, or raw sequence), the tool:
 
-1. builds a multiple sequence alignment of homologs with the **ColabFold MMseqs2** server;
-2. finds every **experimental PDB** structure for each aligned sequence (PDBe SIFTS);
+1. assembles the relevant sequences — **by default the curated reviewed orthologs** of the
+   query's protein family (from UniProt), each aligned to the query; or, optionally, a broad
+   **ColabFold MMseqs2** homology MSA (`--source msa`);
+2. finds every **experimental PDB** structure for each sequence (PDBe SIFTS);
 3. determines which residues are actually **modelled** — observed in the density, not just
    present in SEQRES (disordered/missing residues don't count);
 4. renders the alignment **coloured by structural-coverage depth** — how many structures
    model each residue — as an interactive HTML viewer, a static figure, and data tables.
+
+> **Why curated orthologs by default?** A folding-style MMseqs2 MSA searches a *clustered*
+> database and deliberately filters out redundant near-identical sequences, so curated
+> Swiss-Prot orthologs (mouse, rat, …) are largely absent. For "what structural data exists
+> across the orthologs", you want completeness per species — so the default pulls the reviewed
+> family members straight from UniProt. Use `--source msa` for broad/distant homology instead.
 
 Glance at the result and immediately see which parts of your protein are structurally
 characterised (in itself or any ortholog) and which are blind spots.
@@ -40,12 +48,17 @@ msa-pdb-mining --gene TP53 --organism 9606 --out results/p53
 
 # by raw sequence
 msa-pdb-mining --sequence MEEPQSDPSV... --name myprotein --out results/x
+
+# broad homology MSA instead of curated orthologs
+msa-pdb-mining --uniprot P04637 --source msa --out results/p53_msa
 ```
 
 Useful flags:
 
 | flag | meaning |
 |---|---|
+| `--source orthologs\|msa` | row source: curated UniProt orthologs (default) or ColabFold MMseqs2 |
+| `--max-orthologs N` | max reviewed family members to fetch in ortholog mode (default 500) |
 | `--formats html,image,data` | which outputs to write (default: all) |
 | `--email you@example.org` | contact sent to EBI/ColabFold (etiquette; recommended) |
 | `--reviewed-only` | keep only reviewed (Swiss-Prot) hits — drops uncharacterised TrEMBL noise |
@@ -70,13 +83,17 @@ Useful flags:
 ## How it works
 
 ```
-input ─▶ resolve query (UniProt) ─▶ ColabFold MMseqs2 MSA ─▶ query-anchored alignment
-      ─▶ accession per row ─▶ PDBe SIFTS observed residues ─▶ depth per residue
+                ┌─ default: UniProt reviewed family orthologs ─▶ pairwise-align to query
+input ─▶ query ─┤
+                └─ --source msa: ColabFold MMseqs2 homology search ─▶ query-anchored a3m
+      ─▶ UniProt metadata (organism/gene/PDB existence, batched)
+      ─▶ PDBe SIFTS observed residues ─▶ depth per residue
       ─▶ project onto query columns ─▶ HTML / image / data
 ```
 
-The MSA backend is abstracted (`msa_pdb_mining/msa/base.py`), so a local jackhmmer / MMseqs2
-engine can be added later without touching the rest of the pipeline.
+Both sources produce the same query-anchored `MSA`, so the structure-mapping and rendering
+stages are shared. The MMseqs2 path is abstracted behind `msa_pdb_mining/msa/base.py` for
+future local engines; the ortholog path lives in `msa_pdb_mining/orthologs.py`.
 
 ## Develop / test
 
@@ -86,8 +103,9 @@ engine can be added later without touching the rest of the pipeline.
 
 ## Status
 
-Implemented: `--uniprot` / `--gene` / `--sequence` → ColabFold MSA → experimental-PDB depth →
-HTML + image + data. Caching of all API responses.
+Implemented: `--uniprot` / `--gene` / `--sequence`; **curated UniProt ortholog source
+(default)** and ColabFold MMseqs2 source (`--source msa`); experimental-PDB observed-residue
+depth; HTML + image + data outputs; caching of all API responses.
 
-Planned: species-list ortholog mode (OrthoDB/OMA + alignment); pluggable local MSA backends;
-optional AlphaFold/computed-model coverage; sequence-search fallback for non-UniProt hits.
+Planned: OrthoDB/OMA true-ortholog source and explicit species lists; pluggable local MSA
+backends; optional AlphaFold/computed-model coverage.

@@ -23,6 +23,15 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("--gene", help="Gene name (use with --organism)")
     src.add_argument("--sequence", help="Raw amino-acid sequence (no DB lookup for the query)")
 
+    p.add_argument(
+        "--source", choices=["orthologs", "msa"], default="orthologs",
+        help="Row source: 'orthologs' = curated reviewed UniProt family members aligned "
+        "to the query (default); 'msa' = ColabFold MMseqs2 homology search",
+    )
+    p.add_argument(
+        "--max-orthologs", type=int, default=500,
+        help="Max reviewed family members to fetch in ortholog mode (default: 500)",
+    )
     p.add_argument("--organism", help="Organism for --gene: NCBI taxid or name (default: 9606)")
     p.add_argument("--name", help="Display name when using --sequence")
     p.add_argument("--out", "-o", default="results", help="Output directory (default: results)")
@@ -72,6 +81,8 @@ def main(argv=None) -> int:
     config = Config(
         email=args.email,
         use_cache=not args.no_cache,
+        source=args.source,
+        max_orthologs=args.max_orthologs,
         colabfold_mode=args.mode,
         include_env_hits=args.include_env,
         reviewed_only=args.reviewed_only,
