@@ -76,19 +76,30 @@ def test_a3m_uses_original_residues_not_sanitised():
 TSV = (
     "Entry\tReviewed\tOrganism\tGene Names (primary)\tSequence\tPDB\n"
     "P10361\treviewed\tRattus norvegicus (Rat)\tTp53\tMEDSQSD\t\n"
+    "G0RYI5\tunreviewed\tThermochaetoides thermophila\t\tMEDSQTD\t5FM6;\n"
     "P04637\treviewed\tHomo sapiens (Human)\tTP53\tMEEPQSD\t1TUP;\n"
 )
 
 
 def test_parse_orthologs_excludes_query_and_keeps_metadata():
     orths = parse_orthologs(TSV, exclude="P04637")
-    assert len(orths) == 1
-    o = orths[0]
-    assert o.accession == "P10361"
+    assert len(orths) == 2
+    o = next(o for o in orths if o.accession == "P10361")
     assert o.organism == "Rattus norvegicus"
     assert o.gene == "Tp53"
     assert o.sequence == "MEDSQSD"
     assert o.pdb_ids == set()
+    assert o.reviewed is True
+
+
+def test_parse_orthologs_captures_unreviewed_with_pdb():
+    # an unreviewed (TrEMBL) ortholog that has a PDB structure is kept and flagged
+    # unreviewed (e.g. the Chaetomium RUVBL1 of 5FM6).
+    orths = parse_orthologs(TSV, exclude="P04637")
+    o = next(o for o in orths if o.accession == "G0RYI5")
+    assert o.reviewed is False
+    assert o.pdb_ids == {"5fm6"}
+    assert o.gene is None
 
 
 # A trimmed UniProt entry JSON (CTC1, Q2NKJ3) carrying the orthology cross-refs
@@ -130,6 +141,9 @@ def test_extract_ortholog_groups_empty_when_no_orthology_xrefs():
     assert extract_ortholog_groups({}, DBS) == []
 
 
-def test_build_group_query_ors_clauses_and_restricts_to_reviewed():
+def test_build_group_query_ors_clauses_and_keeps_reviewed_or_structured():
     q = build_group_query([("orthodb", "2314520at2759"), ("panther", "PTHR14865")])
-    assert q == "(xref:orthodb-2314520at2759 OR xref:panther-PTHR14865) AND reviewed:true"
+    assert q == (
+        "(xref:orthodb-2314520at2759 OR xref:panther-PTHR14865) "
+        "AND (reviewed:true OR database:pdb)"
+    )

@@ -14,13 +14,23 @@ text conflates evolutionary orthologs with same-family interactors and unrelated
 members: e.g. UniProt files several species' **STN1** (a CST-complex *interactor*
 of CTC1) under the "CTC1 family", so a ``family:`` search for CTC1 wrongly pulls
 them in, whereas no orthology group does. We read the query's group id in each
-listed db, then ask UniProt for every reviewed entry sharing *any* of those groups
-in one OR query (UniProt dedups by entry); the union maximises ortholog recall
-across databases while excluding non-orthologs. Close paralogs that genuine
-orthology groups place together (e.g. p63/p73 with p53 in a PANTHER family) are
-still included, distinguishable by gene name. If the query has no orthology xref
-at all we fall back to a gene-name search, then to the family text as a last
-resort.
+listed db, then ask UniProt for every member sharing *any* of those groups in one
+OR query (UniProt dedups by entry); the union maximises ortholog recall across
+databases while excluding non-orthologs. Close paralogs that genuine orthology
+groups place together (e.g. p63/p73 with p53 in a PANTHER family) are still
+included, distinguishable by gene name.
+
+Membership is filtered to reviewed (Swiss-Prot) entries **plus** unreviewed
+(TrEMBL) ones that carry a PDB cross-reference (``_ORTHOLOG_FILTER``). The latter
+is essential: structural-biology workhorses are often non-model organisms whose
+proteins are unreviewed — e.g. the *Thermochaetoides thermophila* (Chaetomium)
+RUVBL1 behind PDB 5FM6 is a TrEMBL entry inside RUVBL1's groups, and a
+reviewed-only filter would silently drop the very structure you are looking for.
+Sequence-only TrEMBL entries (thousands per group) are still excluded, so the set
+stays small and curated.
+
+If the query has no orthology xref at all we fall back to a gene-name search, then
+to the family text as a last resort.
 
 Two alignment engines, selected by ``Config.ortholog_aligner``:
   * ``"famsa"`` (default) — one **true multiple alignment** of the query plus
@@ -56,6 +66,14 @@ log = logging.getLogger(__name__)
 
 _FIELDS = "accession,reviewed,organism_name,gene_primary,sequence,xref_pdb"
 
+# Which orthology-group members to keep. We want curated Swiss-Prot orthologs
+# *plus* any unreviewed (TrEMBL) ortholog that has an experimental structure —
+# the latter is precisely what contributes to structural coverage, and excluding
+# it loses real depth (e.g. the Thermochaetoides/Chaetomium RUVBL1 of PDB 5FM6,
+# an unreviewed ortholog squarely inside RUVBL1's groups). Sequence-only TrEMBL
+# entries (thousands per group) are still dropped, so the set stays small.
+_ORTHOLOG_FILTER = "(reviewed:true OR database:pdb)"
+
 
 @dataclass
 class Ortholog:
@@ -64,6 +82,7 @@ class Ortholog:
     gene: Optional[str]
     sequence: str
     pdb_ids: Set[str]
+    reviewed: bool = False
 
 
 # --- ortholog-group resolution ---
@@ -106,13 +125,15 @@ def extract_ortholog_groups(
 
 
 def build_group_query(groups: List[Tuple[str, str]]) -> str:
-    """OR the per-group clauses into one reviewed-only UniProt query.
+    """OR the per-group clauses into one UniProt query for the orthologs we keep.
 
     UniProt dedups by entry, so a single search returns the union of every
-    orthology group's members exactly once — no client-side merge needed.
+    orthology group's members exactly once — no client-side merge needed. The
+    ``_ORTHOLOG_FILTER`` keeps reviewed entries plus unreviewed ones that have a
+    PDB structure (see its note).
     """
     clauses = " OR ".join(f"xref:{token}-{gid}" for token, gid in groups)
-    return f"({clauses}) AND reviewed:true"
+    return f"({clauses}) AND {_ORTHOLOG_FILTER}"
 
 
 def fetch_query_ortholog_groups(
@@ -195,6 +216,7 @@ def parse_orthologs(text: str, exclude: Optional[str]) -> List[Ortholog]:
                 gene=cols[3].strip() or None,
                 sequence=seq,
                 pdb_ids={p.strip().lower() for p in cols[5].split(";") if p.strip()},
+                reviewed=cols[1].strip().lower() == "reviewed",
             )
         )
     return out
@@ -215,7 +237,7 @@ def fetch_reviewed_orthologs(
         # No orthology xref on the entry: the gene symbol is a reasonable proxy
         # and, unlike the family text, will not sweep in differently-named
         # interactors (STN1 has its own symbol, so it never matches gene:CTC1).
-        uq = f"gene:{query.gene} AND reviewed:true"
+        uq = f"gene:{query.gene} AND {_ORTHOLOG_FILTER}"
     elif query.accession:
         # True last resort: the free-text protein family, which *can* include
         # non-orthologs — hence only when nothing better exists.
@@ -224,7 +246,7 @@ def fetch_reviewed_orthologs(
             raise ValueError("No orthology group, gene, or family found for the query")
         log.warning("No orthology cross-reference for %s; falling back to family:%r",
                     query.accession, family)
-        uq = f'family:"{family}" AND reviewed:true'
+        uq = f'family:"{family}" AND {_ORTHOLOG_FILTER}'
     else:
         raise ValueError("Ortholog mode needs a UniProt accession or gene")
     log.info("Ortholog UniProt query: %s", uq)
@@ -388,7 +410,9 @@ def build_ortholog_msa(
     client: httpx.Client, cache: DiskCache, config: Config, query: Query
 ) -> Tuple[MSA, Dict[str, AccMeta], str]:
     orthologs = fetch_reviewed_orthologs(client, cache, config, query)
-    log.info("Fetched %d reviewed family members (orthologs + paralogs)", len(orthologs))
+    n_unreviewed = sum(1 for o in orthologs if not o.reviewed)
+    log.info("Fetched %d orthologs (%d reviewed, %d unreviewed-with-PDB)",
+             len(orthologs), len(orthologs) - n_unreviewed, n_unreviewed)
 
     if config.ortholog_aligner == "pairwise":
         a3ms = _align_pairwise(query, orthologs)
@@ -413,11 +437,11 @@ def build_ortholog_msa(
             MSARow(
                 row_id=o.accession, raw_header=o.accession,
                 a3m_seq=a3m, match_seq=match_columns(a3m),
-                accession=o.accession, organism=o.organism, gene=o.gene, reviewed=True,
+                accession=o.accession, organism=o.organism, gene=o.gene, reviewed=o.reviewed,
             )
         )
         meta[o.accession] = AccMeta(
-            reviewed=True, organism=o.organism, gene=o.gene, pdb_ids=o.pdb_ids, found=True
+            reviewed=o.reviewed, organism=o.organism, gene=o.gene, pdb_ids=o.pdb_ids, found=True
         )
         fasta_chunks.append(f">{o.accession}\n{a3m}")
 

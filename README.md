@@ -29,7 +29,11 @@ and β-strand arrows — on top of the alignment, so you can read coverage again
 > annotation: the family text conflates evolutionary orthologs with same-family *interactors*
 > and unrelated members — e.g. it files several species' **STN1** under the *CTC1* family, so a
 > family search for CTC1 wrongly drags in its CST-complex partner — whereas no orthology group
-> does. Use `--source msa` for broad/distant homology instead.
+> does. The members kept are reviewed Swiss-Prot entries **plus** any unreviewed (TrEMBL)
+> ortholog that has a PDB structure — so structural-biology workhorses that happen to be
+> non-model organisms still count (e.g. the *Thermochaetoides/Chaetomium* RUVBL1 of PDB 5FM6),
+> while the thousands of sequence-only TrEMBL entries per group are dropped. Use `--source msa`
+> for broad/distant homology instead.
 
 Glance at the result and immediately see which parts of your protein are structurally
 characterised (in itself or any ortholog) and which are blind spots.
@@ -69,7 +73,7 @@ Useful flags:
 | flag | meaning |
 |---|---|
 | `--source orthologs\|msa` | row source: curated UniProt orthologs (default) or ColabFold MMseqs2 |
-| `--max-orthologs N` | max reviewed orthology-group members to fetch in ortholog mode (default 500) |
+| `--max-orthologs N` | max orthology-group members to fetch in ortholog mode (default 500) |
 | `--ortholog-aligner famsa\|pairwise` | ortholog-mode alignment: one true FAMSA MSA (default) or star (each aligned to the query) |
 | `--formats html,image,data` | which outputs to write (default: all) |
 | `--email you@example.org` | contact sent to EBI/ColabFold (etiquette; recommended) |
