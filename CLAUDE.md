@@ -64,7 +64,7 @@ understanding execution order:
 | `msa/colabfold.py` | The remote backend: POST to `ticket/msa`, poll `ticket/<id>` to `COMPLETE`, download+untar, extract `uniref.a3m` (optionally merge env member). Result A3M is cached by sequence hash. |
 | `render/data.py` | `write_data_outputs`: `msa.a3m`, `msa.query_anchored.fasta`, `column_summary.csv`, `coverage_long.csv`, `summary.json`. |
 | `render/image.py` | `write_image`: matplotlib viridis heatmap (PNG+SVG), with an aggregate "all orthologs" track on top. Headless (`Agg`). |
-| `render/html.py` | `write_html`: self-contained interactive viewer; cells coloured by depth, hover shows PDB ids + position. Jinja2 template inline. |
+| `render/html.py` | `write_html`: self-contained interactive viewer. Embeds a compact JSON payload (`_build_payload`) and re-flows the alignment **in the browser** into width-fitted blocks (wrapped MSA view) — no horizontal scroll; re-wraps on resize/zoom. Cells coloured by depth (`.dN` classes in the inline stylesheet), hover shows PDB ids + position. Jinja2 template inline. |
 | `render/layout.py` | Shared row selection/ordering for the visual renderers (query first, then by descending total depth). |
 
 ## A3M conventions (read before touching `msa/a3m.py` or `projection.py`)
