@@ -19,6 +19,7 @@ from .net import make_client
 from .projection import build_coverage_matrix
 from .render import write_data_outputs, write_html, write_image
 from .orthologs import build_ortholog_msa
+from .secondary_structure import fetch_secondary_structure
 from .structures import fetch_coverage
 from .uniprot import AccMeta, batch_lookup
 
@@ -196,7 +197,15 @@ def run_pipeline(
             source_label = backend.name
 
         coverage = collect_structures(client, cache, config, msa, meta)
-        matrix = build_coverage_matrix(msa, coverage)
+
+        # Query secondary structure (helices/strands, in UniProt coords) for the
+        # topology cartoon drawn on top of the alignment.
+        query_ss = None
+        if config.show_secondary_structure and query.accession:
+            log.info("Fetching query secondary structure for %s ...", query.accession)
+            query_ss = fetch_secondary_structure(client, cache, config, query.accession)
+
+        matrix = build_coverage_matrix(msa, coverage, query_ss=query_ss)
 
     params = {
         "source": source_label,
@@ -205,6 +214,7 @@ def run_pipeline(
         "reviewed_only": config.reviewed_only,
         "max_structured_rows": config.max_structured_rows,
         "n_msa_rows": len(msa.rows),
+        "secondary_structure": matrix.has_secondary_structure,
     }
 
     outputs: List[Path] = []

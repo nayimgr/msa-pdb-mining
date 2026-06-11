@@ -17,10 +17,40 @@ from .model import (
     StructureCoverage,
 )
 from .msa.a3m import find_residue_offset, iter_match_residues
+from .secondary_structure import SecondaryStructure
+
+
+def _project_query_ss(
+    msa: MSA, n_cols: int, query_ss: Optional[SecondaryStructure]
+) -> Optional[List[Optional[str]]]:
+    """Map the query's per-residue SS elements onto query-anchored columns.
+
+    Uses the same residue/column walk as the coverage projection: locate the
+    query within the SS endpoint's full sequence, then place each consensus
+    element at its column. Returns ``None`` if there is nothing to draw.
+    """
+    if query_ss is None or not query_ss.has_elements or not query_ss.full_sequence:
+        return None
+    query_row = msa.rows[0]
+    offset = find_residue_offset(query_row.a3m_seq, query_ss.full_sequence)
+    if offset is None:
+        return None
+    track: List[Optional[str]] = [None] * n_cols
+    placed = False
+    for col, resnum in iter_match_residues(query_row.a3m_seq, offset):
+        if col >= n_cols:
+            break
+        element = query_ss.element(resnum)
+        if element is not None:
+            track[col] = element
+            placed = True
+    return track if placed else None
 
 
 def build_coverage_matrix(
-    msa: MSA, coverage_by_acc: Dict[str, StructureCoverage]
+    msa: MSA,
+    coverage_by_acc: Dict[str, StructureCoverage],
+    query_ss: Optional[SecondaryStructure] = None,
 ) -> CoverageMatrix:
     n_cols = msa.length
     n_rows = len(msa.rows)
@@ -84,4 +114,5 @@ def build_coverage_matrix(
         pdb_ids=pdb_ids,
         column_pdb_ids=column_pdb_ids,
         query_index=0,
+        query_ss=_project_query_ss(msa, n_cols, query_ss),
     )

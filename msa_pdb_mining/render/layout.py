@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -20,6 +20,26 @@ def select_rows(matrix: CoverageMatrix, max_rows: int) -> List[int]:
     others.sort(key=lambda i: totals[i], reverse=True)
     ordered = [matrix.query_index] + others
     return ordered[: max(1, max_rows)]
+
+
+def ss_runs(track: Sequence[Optional[str]]) -> List[Tuple[str, int, int]]:
+    """Collapse a per-column SS track into ``(element, start_col, end_col)`` runs.
+
+    Consecutive columns with the same non-``None`` element become one segment —
+    what the renderers draw as a single helix cylinder or strand arrow.
+    """
+    runs: List[Tuple[str, int, int]] = []
+    start: Optional[int] = None
+    cur: Optional[str] = None
+    for col, el in enumerate(track):
+        if el != cur:
+            if start is not None and cur is not None:
+                runs.append((cur, start, col - 1))
+            start = col if el is not None else None
+            cur = el
+    if start is not None and cur is not None:
+        runs.append((cur, start, len(track) - 1))
+    return runs
 
 
 def row_label(matrix: CoverageMatrix, i: int) -> str:
