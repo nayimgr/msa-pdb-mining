@@ -72,6 +72,9 @@ class Config:
 
     # --- rendering ---
     max_rows_render: int = 60  # rows shown in the image/HTML (data files keep all)
+    # Draw the query's secondary-structure cartoon (helices/strands) on top of
+    # the alignment, when the query has an accession with PDB structures.
+    show_secondary_structure: bool = True
 
     def user_agent(self) -> str:
         contact = f"; mailto:{self.email}" if self.email else ""

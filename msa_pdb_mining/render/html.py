@@ -8,34 +8,45 @@ JSON payload so it re-flows live on window resize and on zoom, which a static
 server-side layout cannot do (the render machine has no idea how wide the
 reader's screen is).
 
-Cells are coloured by structural-coverage depth (viridis, matching the static
-heatmap); hovering a cell shows the residue position, depth, and the PDB ids
-modelling it. The depth→colour classes (``.d1``…``.dN``) are emitted into the
-stylesheet so the per-cell DOM stays small.
+Cells are coloured by structural-coverage depth (seaborn's mako, matching the
+static heatmap); hovering a cell shows the residue position, depth, and the PDB
+ids modelling it. The depth→colour classes (``.d1``…``.dN``) are emitted into the
+stylesheet so the per-cell DOM stays small. When the query has experimental
+structures, its secondary structure (helix cylinders / strand arrows) is drawn
+as an inline SVG cartoon on top of each block, in the same browser-side render.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
-import matplotlib
 import matplotlib.colors as mcolors
 from jinja2 import Template
 
 from ..config import Config
 from ..model import MSA, CoverageMatrix, Query
 from .layout import row_label, select_rows
+from .palette import SS_HELIX_COLOR, SS_STRAND_COLOR, depth_cmap
 
 
-def _depth_colors(vmax: int) -> dict:
-    cmap = matplotlib.colormaps["viridis"]
-    colors = {}
+def _text_on(hex_color: str) -> str:
+    """Black or white body text, whichever reads better on ``hex_color``."""
+    r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    return "#ffffff" if luminance < 140 else "#1b1f23"
+
+
+def _depth_styles(vmax: int) -> Dict[int, Tuple[str, str]]:
+    """Map each depth 1..vmax to a ``(background, text)`` colour pair (mako)."""
+    cmap = depth_cmap()
+    styles: Dict[int, Tuple[str, str]] = {}
     for d in range(1, vmax + 1):
         frac = (d - 1) / (vmax - 1) if vmax > 1 else 1.0
-        colors[d] = mcolors.to_hex(cmap(frac))
-    return colors
+        bg = mcolors.to_hex(cmap(frac))
+        styles[d] = (bg, _text_on(bg))
+    return styles
 
 
 def _fmt_ids(ids: Set[str], limit: int = 15) -> str:
@@ -43,6 +54,17 @@ def _fmt_ids(ids: Set[str], limit: int = 15) -> str:
     if len(s) <= limit:
         return ", ".join(s)
     return ", ".join(s[:limit]) + f" (+{len(s) - limit} more)"
+
+
+def _ss_string(matrix: CoverageMatrix) -> str:
+    """Per-column secondary-structure track as a compact string (``H``/``E``/``-``).
+
+    Empty when the query has no secondary structure, so the browser can simply
+    test for a falsy value and skip the cartoon track.
+    """
+    if not matrix.has_secondary_structure:
+        return ""
+    return "".join(e if e else "-" for e in matrix.query_ss)
 
 
 def _build_payload(matrix: CoverageMatrix, msa: MSA, selected: List[int]) -> dict:
@@ -104,6 +126,7 @@ def _build_payload(matrix: CoverageMatrix, msa: MSA, selected: List[int]) -> dic
         "querySeq": matrix.query_seq,
         "idPool": id_pool,
         "aggregate": aggregate,
+        "ss": _ss_string(matrix),
         "rows": rows,
     }
 
@@ -120,6 +143,7 @@ _TEMPLATE = Template(
  h1{font-size:16px;margin:0 0 4px;} .sub{font-size:12px;color:#586069;}
  .legend{margin-top:8px;font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
  .legend .sw{display:inline-block;width:14px;height:14px;border:1px solid #ccc;vertical-align:middle;}
+ .legend svg{vertical-align:middle;}
  .toolbar{margin-top:8px;font-size:12px;display:flex;align-items:center;gap:8px;color:#586069;}
  .toolbar button{font:inherit;cursor:pointer;border:1px solid #d1d5da;background:#f6f8fa;
         border-radius:5px;padding:2px 9px;line-height:1.4;}
@@ -139,6 +163,8 @@ _TEMPLATE = Template(
  .z{background:#eef0f2;}
  .rulerline{color:#959da5;}
  .aggline .label{font-weight:600;}
+ .ssline .label{font-weight:600;} .ssline .cells{display:flex;align-items:flex-end;}
+ .ss{display:block;}
  .qline .label{font-weight:700;color:#0b67d0;}
  .qline .cells{outline:1px solid rgba(11,103,208,.18);}
  @media (max-width:560px){ :root{--labelw:120px;} }
@@ -157,6 +183,9 @@ _TEMPLATE = Template(
    {% for d, col in legend %}<span class="sw" style="background:{{col}}"></span><span>{{d}}</span>{% endfor %}
    <span class="sw ns" style="margin-left:10px;"></span><span>residue, no structure</span>
    <span class="sw gap"></span><span>gap</span>
+   {% if has_ss %}<span style="margin-left:10px;">query SS:</span>
+   <svg width="18" height="14"><rect x="0" y="2" width="18" height="10" rx="2" fill="{{ ss_helix }}" stroke="#7a1f1f"/></svg><span>α-helix</span>
+   <svg width="18" height="14"><polygon points="0,4 11,4 11,2 18,7 11,12 11,10 0,10" fill="{{ ss_strand }}" stroke="#9c7600"/></svg><span>β-strand</span>{% endif %}
  </div>
  <div class="toolbar">
    <span>zoom:</span>
@@ -174,6 +203,7 @@ _TEMPLATE = Template(
  var root = document.documentElement;
  var TICK_STEP = 10;
  var cellW = 13;
+ var SS_HELIX = '{{ ss_helix }}', SS_STRAND = '{{ ss_strand }}';
 
  function attr(s){
    return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
@@ -195,6 +225,32 @@ _TEMPLATE = Template(
      }
    }
    return h;
+ }
+ // Secondary-structure cartoon for one block: helices as rounded cylinders,
+ // strands as N->C arrows, sized to the current cell width so it stays aligned
+ // to the residue columns above it (and re-flows/re-zooms with everything else).
+ function ssSvg(start, end){
+   var ss = DATA.ss, n = end-start, width = n*cellW, h = 22;
+   var s = '<svg width="'+width+'" height="'+h+'" class="ss" viewBox="0 0 '+width+' '+h+'" preserveAspectRatio="none">';
+   s += '<line x1="0" y1="11" x2="'+width+'" y2="11" stroke="#b0b4b8" stroke-width="1"/>';
+   var c = start;
+   while(c < end){
+     var el = ss.charAt(c);
+     if(el === '-'){ c++; continue; }
+     var run = c+1;
+     while(run < end && ss.charAt(run) === el){ run++; }   // [c, run)
+     var x0 = (c-start)*cellW, x1 = (run-start)*cellW;
+     if(el === 'H'){
+       s += '<rect x="'+x0+'" y="4" width="'+(x1-x0)+'" height="14" rx="3" '
+          + 'fill="'+SS_HELIX+'" stroke="#7a1f1f" stroke-width="0.7"/>';
+     } else {
+       var head = Math.min(2*cellW, x1-x0), be = x1-head;
+       s += '<polygon points="'+x0+',7 '+be+',7 '+be+',4 '+x1+',11 '+be+',18 '+be+',15 '+x0+',15" '
+          + 'fill="'+SS_STRAND+'" stroke="#9c7600" stroke-width="0.7"/>';
+     }
+     c = run;
+   }
+   return s + '</svg>';
  }
  function aggCells(start, end){
    var d = DATA.aggregate.depths, ids = DATA.aggregate.ids, h = '';
@@ -236,6 +292,9 @@ _TEMPLATE = Template(
      var end = Math.min(start+perBlock, DATA.columns);
      html += '<div class="block">';
      html += '<div class="line rulerline"><div class="label"></div><div class="cells">'+ruler(start,end)+'</div></div>';
+     if(DATA.ss){
+       html += '<div class="line ssline"><div class="label">secondary structure</div><div class="cells">'+ssSvg(start,end)+'</div></div>';
+     }
      html += '<div class="line aggline"><div class="label">all orthologs (union)</div><div class="cells">'+aggCells(start,end)+'</div></div>';
      for(var r=0;r<DATA.rows.length;r++){
        var row = DATA.rows[r];
@@ -275,8 +334,10 @@ def write_html(
     out_dir.mkdir(parents=True, exist_ok=True)
     selected = select_rows(matrix, config.max_rows_render)
     vmax = max(int(matrix.depth.max()), int(matrix.column_aggregate.max()), 1)
-    colors = _depth_colors(vmax)
-    depth_css = "\n".join(f" .d{d}{{background:{c};color:#fff;}}" for d, c in colors.items())
+    styles = _depth_styles(vmax)
+    depth_css = "\n".join(
+        f" .d{d}{{background:{bg};color:{fg};}}" for d, (bg, fg) in styles.items()
+    )
 
     payload = _build_payload(matrix, msa, selected)
     # Embedded as a JSON <script>; escape '<' so a stray '</script>' in the data
@@ -299,9 +360,12 @@ def write_html(
         query=query,
         matrix=matrix,
         depth_css=depth_css,
-        legend=sorted(colors.items()),
+        legend=[(d, bg) for d, (bg, _fg) in sorted(styles.items())],
         data_json=data_json,
         stats=stats,
+        has_ss=matrix.has_secondary_structure,
+        ss_helix=SS_HELIX_COLOR,
+        ss_strand=SS_STRAND_COLOR,
     )
     path = out_dir / "alignment.html"
     path.write_text(html)

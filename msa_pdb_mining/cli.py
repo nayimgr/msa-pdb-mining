@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-rows-render", type=int, default=60,
         help="Max alignment rows drawn in the image/HTML (default: 60)",
     )
+    p.add_argument(
+        "--no-secondary-structure", dest="secondary_structure",
+        action="store_false",
+        help="Don't draw the query's secondary-structure cartoon on the alignment",
+    )
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p
@@ -95,6 +100,7 @@ def main(argv=None) -> int:
         max_structured_rows=args.max_structured_rows,
         max_lookup_accessions=args.max_lookup_accessions,
         max_rows_render=args.max_rows_render,
+        show_secondary_structure=args.secondary_structure,
     )
     if args.cache_dir:
         config.cache_dir = Path(args.cache_dir)

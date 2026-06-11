@@ -43,8 +43,11 @@ understanding execution order:
 2. `msa/colabfold.ColabFoldMMseqs2Backend.run` → an A3M string.
 3. `pipeline.build_msa` → an `MSA` (parses A3M, dedups rows, extracts accessions).
 4. `pipeline.collect_structures` → `{accession: StructureCoverage}` from PDBe.
-5. `projection.build_coverage_matrix` → a `CoverageMatrix` (depth projected onto query columns).
-6. `render/*` → data files, image, HTML.
+5. `secondary_structure.fetch_secondary_structure` → the query's `SecondaryStructure`
+   (helices/strands in UniProt coords), only when the query has an accession.
+6. `projection.build_coverage_matrix` → a `CoverageMatrix` (depth projected onto query
+   columns; the query SS is projected onto the same columns into `matrix.query_ss`).
+7. `render/*` → data files, image, HTML.
 
 ## Module map (`msa_pdb_mining/`)
 
@@ -58,14 +61,16 @@ understanding execution order:
 | `cache.py` | `DiskCache`: tiny namespace+key on-disk cache (JSON and text). `cached_json` only writes non-`None` values — see caching contract below. |
 | `accession_map.py` | `extract_accession(header)`: best-effort UniProt accession from an A3M header (strips `UniRef100_`, `sp|`/`tr|`, `/start-end`, isoform `-2`). Returns `None` for UniParc/env hits → carried as "unknown" rows. |
 | `structures.py` | `fetch_coverage` / `build_coverage`: PDBe graph-api `uniprot/unipdb/<acc>` → `StructureCoverage`. Only `indexType==UNIPROT` + `observed=="Y"` ranges count. |
+| `secondary_structure.py` | `fetch_secondary_structure` / `build_secondary_structure`: PDBe graph-api `uniprot/secondary_structures/<acc>` → `SecondaryStructure`. Per-residue **consensus** element (`H`/`E`) across all depositions (ties → helix); only the query's is fetched. |
 | `projection.py` | `build_coverage_matrix`: for each row, locate its hit-subsequence offset in the full UniProt sequence, then map each match column to a residue number and pull depth. Assigns `STATUS_*`. |
 | `msa/base.py` | `MSABackend` ABC. The homology search is abstracted so the remote ColabFold engine can later be swapped for a local jackhmmer/MMseqs2 without touching the rest. A backend turns a query sequence into a query-anchored A3M. |
 | `msa/a3m.py` | A3M parsing + the column/residue math: `parse_a3m`, `match_columns`, `ungapped`, `iter_match_residues`, `find_residue_offset`. **The trickiest, most important file — see A3M conventions below.** |
 | `msa/colabfold.py` | The remote backend: POST to `ticket/msa`, poll `ticket/<id>` to `COMPLETE`, download+untar, extract `uniref.a3m` (optionally merge env member). Result A3M is cached by sequence hash. |
 | `render/data.py` | `write_data_outputs`: `msa.a3m`, `msa.query_anchored.fasta`, `column_summary.csv`, `coverage_long.csv`, `summary.json`. |
-| `render/image.py` | `write_image`: matplotlib viridis heatmap (PNG+SVG), with an aggregate "all orthologs" track on top. Headless (`Agg`). |
-| `render/html.py` | `write_html`: self-contained interactive viewer. Embeds a compact JSON payload (`_build_payload`) and re-flows the alignment **in the browser** into width-fitted blocks (wrapped MSA view) — no horizontal scroll; re-wraps on resize/zoom. Cells coloured by depth (`.dN` classes in the inline stylesheet), hover shows PDB ids + position. Jinja2 template inline. |
-| `render/layout.py` | Shared row selection/ordering for the visual renderers (query first, then by descending total depth). |
+| `render/image.py` | `write_image`: matplotlib **mako** heatmap (PNG+SVG), aggregate "all orthologs" track, and (when present) the query secondary-structure cartoon on top. Headless (`Agg`). |
+| `render/html.py` | `write_html`: self-contained interactive viewer. Embeds a compact JSON payload (`_build_payload`) and re-flows the alignment **in the browser** into width-fitted blocks (wrapped MSA view) — no horizontal scroll; re-wraps on resize/zoom. Cells coloured by depth (mako, luminance-aware text, `.dN` classes in the inline stylesheet); the query secondary structure is drawn as an inline SVG cartoon per block; hover shows PDB ids + position. Jinja2 template inline. |
+| `render/layout.py` | Shared row selection/ordering for the visual renderers (query first, then by descending total depth), plus `ss_runs` (collapse the per-column SS track into helix/strand segments). |
+| `render/palette.py` | Shared colours: `depth_cmap()` (seaborn mako, lazily imported + cached) and the SS cartoon colours, so image and HTML stay in lockstep. |
 
 ## A3M conventions (read before touching `msa/a3m.py` or `projection.py`)
 
@@ -103,7 +108,7 @@ Each alignment row gets exactly one `STATUS_*` after projection:
 | Service | Base | Used for |
 |---|---|---|
 | ColabFold MMseqs2 | `https://api.colabfold.com` | the MSA (ticket submit/poll/download) |
-| PDBe graph-api | `https://www.ebi.ac.uk/pdbe/graph-api` | `uniprot/unipdb/<acc>` — observed residue ranges |
+| PDBe graph-api | `https://www.ebi.ac.uk/pdbe/graph-api` | `uniprot/unipdb/<acc>` — observed residue ranges; `uniprot/secondary_structures/<acc>` — query helices/strands |
 | UniProt REST | `https://rest.uniprot.org` | FASTA by accession; gene+organism search |
 
 Network etiquette: pass `--email` to set a contact in the User-Agent (recommended, not
@@ -112,8 +117,8 @@ required). `request_timeout` default 30s; ColabFold poll interval 5s, max 1800s.
 ## Caching contract (important for offline work and tests)
 
 `DiskCache` lives at `platformdirs.user_cache_dir("msa-pdb-mining")` by default; override with
-`--cache-dir` or disable with `--no-cache`. Namespaces in use: `a3m`, `unipdb`,
-`uniprot_fasta`, `uniprot_gene`.
+`--cache-dir` or disable with `--no-cache`. Namespaces in use: `a3m`, `unipdb`, `unipdb_ss`,
+`uniprot_fasta`, `uniprot_gene`, `uniprot_meta`.
 
 The subtle rule (`cache.cached_json` + `structures.fetch_coverage`): a **definitive 404**
 (accession has no SIFTS/PDB mapping) is cached as `{}` so it's never re-queried; a **transient
@@ -126,11 +131,12 @@ cache `None`. Preserve this distinction if you touch the caching path.
 python3 -m venv .venv
 .venv/bin/pip install -e .          # editable install; console script: msa-pdb-mining
 .venv/bin/pip install -e '.[dev]'   # + pytest
-.venv/bin/pytest -q                 # 21 offline unit tests, no network
+.venv/bin/pytest -q                 # offline unit tests, no network
 ```
 
 The test suite (`tests/`) is **fully offline** — it exercises pure functions with synthetic
-fixtures (`test_a3m`, `test_structures`, `test_projection`, `test_accession`). There is no
+fixtures (`test_a3m`, `test_structures`, `test_secondary_structure`, `test_projection`,
+`test_accession`). There is no
 integration test that hits the live services. When adding logic, prefer factoring a pure
 function (like `build_coverage`, `build_coverage_matrix`, `extract_accession`) that can be
 unit-tested without network, mirroring the existing split between `fetch_*` (I/O) and
@@ -145,16 +151,20 @@ unit-tested without network, mirroring the existing split between `fetch_*` (I/O
   the final CLI summary.
 - Pure/I-O split: keep network in `fetch_*`/backend methods, keep transformation pure and
   testable.
-- numpy for the depth matrix; pandas/matplotlib/jinja2 are dependencies but used narrowly.
+- numpy for the depth matrix; pandas/matplotlib/seaborn/jinja2 are dependencies but used
+  narrowly (seaborn only supplies the mako colormap, via `render/palette.depth_cmap`).
 
 ## Outputs written to `--out` (default `results/`)
 
 `alignment.html` (interactive), `alignment.png` + `alignment.svg` (static heatmap),
 `column_summary.csv` (per query residue: #structures, #orthologs, PDB ids), `coverage_long.csv`
 (one row per covered ortholog×residue cell), `summary.json` (run params + per-column aggregate
-vector), `msa.a3m` + `msa.query_anchored.fasta` (raw alignment). Visual renderers cap rows at
-`--max-rows-render` (default 60); data files keep **all** rows. `results/` is gitignored;
-`results/p53`, `results/ruvbl1`, `results/ruvbl2` are committed sample runs.
+vector), `msa.a3m` + `msa.query_anchored.fasta` (raw alignment). The depth heatmap uses the
+mako palette; when the query has experimental structures, both visual renderers draw its
+secondary structure (helix cylinders / strand arrows) as a track on top — suppress with
+`--no-secondary-structure`. Visual renderers cap rows at `--max-rows-render` (default 60);
+data files keep **all** rows. `results/` is gitignored; `results/p53`, `results/ruvbl1`,
+`results/ruvbl2` are committed sample runs (predate these visual changes — regenerate to refresh).
 
 ## Repo facts
 
@@ -168,7 +178,8 @@ vector), `msa.a3m` + `msa.query_anchored.fasta` (raw alignment). Visual renderer
 ## Status & roadmap (from README)
 
 **Implemented:** `--uniprot`/`--gene`/`--sequence` → ColabFold MSA → experimental-PDB depth →
-HTML + image + data, with full API-response caching.
+HTML + image + data (mako palette, query secondary-structure overlay), with full API-response
+caching.
 
 **Planned:** species-list ortholog mode (OrthoDB/OMA + alignment); pluggable local MSA
 backends (the `MSABackend` ABC exists for exactly this); optional AlphaFold/computed-model

@@ -13,7 +13,12 @@ Given a UniProt accession (or gene name, or raw sequence), the tool:
 3. determines which residues are actually **modelled** — observed in the density, not just
    present in SEQRES (disordered/missing residues don't count);
 4. renders the alignment **coloured by structural-coverage depth** — how many structures
-   model each residue — as an interactive HTML viewer, a static figure, and data tables.
+   model each residue (seaborn's *mako* palette) — as an interactive HTML viewer, a static
+   figure, and data tables.
+
+When the query itself has experimental structures, its **secondary structure** (helices and
+strands, in UniProt coordinates from PDBe) is drawn as a topology cartoon — α-helix cylinders
+and β-strand arrows — on top of the alignment, so you can read coverage against fold.
 
 > **Why curated orthologs by default?** A folding-style MMseqs2 MSA searches a *clustered*
 > database and deliberately filters out redundant near-identical sequences, so curated
@@ -72,6 +77,7 @@ Useful flags:
 | `--max-structured-rows N` | cap accessions resolved to observed PDB residues (default 200) |
 | `--max-lookup-accessions N` | cap accessions fetched for UniProt metadata (batched; default 2000) |
 | `--max-rows-render N` | rows drawn in the image/HTML (default 60) |
+| `--no-secondary-structure` | don't draw the query's secondary-structure cartoon |
 | `--include-env` | also include environmental/metagenomic hits (no PDB) |
 | `--cache-dir DIR` / `--no-cache` | control the on-disk response cache |
 | `-v` | verbose progress logging |
@@ -80,8 +86,8 @@ Useful flags:
 
 | file | contents |
 |---|---|
-| `alignment.html` | interactive viewer; cells coloured by depth, hover for PDB ids + method/resolution |
-| `alignment.png` / `alignment.svg` | static coverage heatmap (query + aggregate track) |
+| `alignment.html` | interactive viewer; cells coloured by depth (mako), query SS cartoon on top, hover for PDB ids + method/resolution |
+| `alignment.png` / `alignment.svg` | static coverage heatmap (query SS cartoon + aggregate track) |
 | `column_summary.csv` | per query residue: #structures, #orthologs covered, PDB ids |
 | `coverage_long.csv` | one row per covered (ortholog, residue) cell |
 | `summary.json` | run parameters + per-column aggregate coverage vector |

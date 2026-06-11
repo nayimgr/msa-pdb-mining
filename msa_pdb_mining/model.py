@@ -110,10 +110,17 @@ class CoverageMatrix:
     pdb_ids: List[List[Set[str]]]  # [n_rows][columns] sets of pdb ids
     column_pdb_ids: List[Set[str]]  # union of pdb ids across all rows, per column
     query_index: int = 0
+    # Per-column consensus secondary-structure element of the query ("H"/"E" or
+    # None), length == columns. None for the whole matrix when unavailable.
+    query_ss: Optional[List[Optional[str]]] = None
 
     @property
     def n_rows(self) -> int:
         return self.depth.shape[0]
+
+    @property
+    def has_secondary_structure(self) -> bool:
+        return bool(self.query_ss) and any(e is not None for e in self.query_ss)
 
     @property
     def column_aggregate(self) -> np.ndarray:
