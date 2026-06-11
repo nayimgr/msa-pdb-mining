@@ -38,6 +38,12 @@ def _text_on(hex_color: str) -> str:
     return "#ffffff" if luminance < 140 else "#1b1f23"
 
 
+def _gradient_stops(n: int = 20) -> str:
+    """CSS color stops for a continuous depth legend bar (depth=1 → depth=max)."""
+    cmap = depth_cmap()
+    return ", ".join(mcolors.to_hex(cmap(i / (n - 1))) for i in range(n))
+
+
 def _depth_styles(vmax: int) -> Dict[int, Tuple[str, str]]:
     """Map each depth 1..vmax to a ``(background, text)`` colour pair (mako)."""
     cmap = depth_cmap()
@@ -101,6 +107,7 @@ def _build_payload(matrix: CoverageMatrix, msa: MSA, selected: List[int]) -> dic
         chars: List[str] = []
         depths: List[int] = []
         ids: List[int] = []
+        row_all_ids: Set[str] = set()
         for c in range(cols):
             ch = seq[c] if c < len(seq) else "-"
             chars.append(ch)
@@ -110,7 +117,12 @@ def _build_payload(matrix: CoverageMatrix, msa: MSA, selected: List[int]) -> dic
                 continue
             d = int(matrix.depth[i, c])
             depths.append(d)
-            ids.append(intern(matrix.pdb_ids[i][c]) if d else -1)
+            if d:
+                cell_ids = matrix.pdb_ids[i][c]
+                ids.append(intern(cell_ids))
+                row_all_ids |= cell_ids
+            else:
+                ids.append(-1)
         rows.append(
             {
                 "label": row_label(matrix, i),
@@ -118,6 +130,8 @@ def _build_payload(matrix: CoverageMatrix, msa: MSA, selected: List[int]) -> dic
                 "chars": "".join(chars),
                 "depths": depths,
                 "ids": ids,
+                "pdbCount": len(row_all_ids),
+                "pdbList": intern(row_all_ids),
             }
         )
 
@@ -153,8 +167,10 @@ _TEMPLATE = Template(
  .block{margin:0 0 20px;}
  .line{display:flex;align-items:stretch;white-space:nowrap;}
  .label{flex:0 0 var(--labelw);max-width:var(--labelw);padding-right:8px;font-size:10px;
-        color:#24292e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-        border-right:1px solid #eee;display:flex;align-items:center;}
+        color:#24292e;overflow:hidden;border-right:1px solid #eee;display:flex;align-items:center;gap:3px;}
+ .label-text{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+ .pdb-badge{flex:0 0 auto;background:#ddf4ff;color:#0b67d0;border:1px solid #b6e3f4;
+            border-radius:3px;padding:0 3px;font-size:8px;line-height:1.7;white-space:nowrap;}
  .cells{white-space:nowrap;}
  .c{display:inline-block;width:var(--cellw);text-align:center;overflow:visible;}
  .tick{color:#959da5;font-size:9px;}
@@ -168,6 +184,9 @@ _TEMPLATE = Template(
  .qline .label{font-weight:700;color:#0b67d0;}
  .qline .cells{outline:1px solid rgba(11,103,208,.18);}
  @media (max-width:560px){ :root{--labelw:120px;} }
+ #tip{position:fixed;display:none;background:#24292e;color:#f6f8fa;padding:6px 10px;
+      border-radius:5px;font-size:11px;max-width:400px;line-height:1.55;z-index:200;
+      pointer-events:none;white-space:pre-wrap;box-shadow:0 2px 8px rgba(0,0,0,.3);}
 {{ depth_css }}
 </style></head>
 <body>
@@ -180,7 +199,13 @@ _TEMPLATE = Template(
  </div>
  <div class="legend"><span>depth:</span>
    <span class="sw z"></span><span>0</span>
-   {% for d, col in legend %}<span class="sw" style="background:{{col}}"></span><span>{{d}}</span>{% endfor %}
+   <span style="margin-left:10px;display:inline-flex;align-items:center;gap:4px;">
+     <span style="font-size:10px;color:#586069;">1</span>
+     <span style="display:inline-block;width:130px;height:14px;
+                  background:linear-gradient(to right,{{ gradient }});
+                  border:1px solid #ccc;border-radius:2px;"></span>
+     <span style="font-size:10px;color:#586069;">{{ vmax }}</span>
+   </span>
    <span class="sw ns" style="margin-left:10px;"></span><span>residue, no structure</span>
    <span class="sw gap"></span><span>gap</span>
    {% if has_ss %}<span style="margin-left:10px;">query SS:</span>
@@ -195,6 +220,7 @@ _TEMPLATE = Template(
  </div>
 </header>
 <main><div id="viewer"></div></main>
+<div id="tip"></div>
 <script id="coverage-data" type="application/json">{{ data_json }}</script>
 <script>
 (function(){
@@ -258,8 +284,9 @@ _TEMPLATE = Template(
      var depth = d[c], pos = c+1;
      if(depth>0){
        var idx = ids[c], idStr = idx>=0 ? DATA.idPool[idx] : '';
-       var t = 'pos '+pos+' ('+DATA.querySeq[c]+') · '+depth+' structures'+(idStr?' · '+idStr:'');
-       h += '<span class="c d'+depth+'" title="'+attr(t)+'">&nbsp;</span>';
+       var t = 'pos '+pos+' ('+DATA.querySeq[c]+') · '+depth+' structure'+(depth===1?'':'s')
+             + (idStr ? '\\n'+idStr : '');
+       h += '<span class="c d'+depth+'" data-tip="'+attr(t)+'">&nbsp;</span>';
      } else {
        h += '<span class="c z">&nbsp;</span>';
      }
@@ -274,8 +301,9 @@ _TEMPLATE = Template(
      var depth = depths[c];
      if(depth>0){
        var idx = ids[c], idStr = idx>=0 ? DATA.idPool[idx] : '';
-       var t = ch+pos+' · depth '+depth+(idStr?' · '+idStr:'');
-       h += '<span class="c d'+depth+'" title="'+attr(t)+'">'+ch+'</span>';
+       var t = ch+pos+' · '+depth+' structure'+(depth===1?'':'s')
+             + (idStr ? '\\n'+idStr : '');
+       h += '<span class="c d'+depth+'" data-tip="'+attr(t)+'">'+ch+'</span>';
      } else {
        h += '<span class="c ns">'+ch+'</span>';
      }
@@ -298,8 +326,16 @@ _TEMPLATE = Template(
      html += '<div class="line aggline"><div class="label">all orthologs (union)</div><div class="cells">'+aggCells(start,end)+'</div></div>';
      for(var r=0;r<DATA.rows.length;r++){
        var row = DATA.rows[r];
+       var pdbTip = row.pdbCount > 0
+         ? '\\n' + row.pdbCount + ' PDB' + (row.pdbCount === 1 ? '' : 's') + ':'
+           + (row.pdbList >= 0 ? '\\n' + DATA.idPool[row.pdbList] : '')
+         : '';
+       var badge = row.pdbCount > 0
+         ? '<span class="pdb-badge">'+row.pdbCount+' PDB'+(row.pdbCount===1?'':'s')+'</span>'
+         : '';
        html += '<div class="line'+(row.isQuery?' qline':'')+'">'
-            +  '<div class="label" title="'+attr(row.label)+'">'+attr(row.label)+'</div>'
+            +  '<div class="label" data-tip="'+attr(row.label+pdbTip)+'">'
+            +  '<span class="label-text">'+attr(row.label)+'</span>'+badge+'</div>'
             +  '<div class="cells">'+rowCells(row,start,end)+'</div></div>';
      }
      html += '</div>';
@@ -320,6 +356,30 @@ _TEMPLATE = Template(
  window.addEventListener('resize', function(){
    clearTimeout(timer); timer = setTimeout(render, 120);
  });
+
+ var tip = document.getElementById('tip');
+ document.addEventListener('mouseover', function(e){
+   var el = e.target;
+   while(el && el !== document.body){
+     if(el.dataset && el.dataset.tip !== undefined){
+       tip.textContent = el.dataset.tip;
+       tip.style.display = 'block';
+       return;
+     }
+     el = el.parentElement;
+   }
+   tip.style.display = 'none';
+ });
+ document.addEventListener('mousemove', function(e){
+   if(tip.style.display === 'none') return;
+   var x = e.clientX + 14, y = e.clientY - 8;
+   if(x + tip.offsetWidth > window.innerWidth - 4) x = e.clientX - tip.offsetWidth - 10;
+   if(y + tip.offsetHeight > window.innerHeight - 4) y = e.clientY - tip.offsetHeight - 10;
+   tip.style.left = x + 'px';
+   tip.style.top = y + 'px';
+ });
+ document.addEventListener('mouseleave', function(){ tip.style.display = 'none'; });
+
  setCell(cellW);
 })();
 </script>
@@ -360,7 +420,8 @@ def write_html(
         query=query,
         matrix=matrix,
         depth_css=depth_css,
-        legend=[(d, bg) for d, (bg, _fg) in sorted(styles.items())],
+        gradient=_gradient_stops(),
+        vmax=vmax,
         data_json=data_json,
         stats=stats,
         has_ss=matrix.has_secondary_structure,

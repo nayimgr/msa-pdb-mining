@@ -1,8 +1,8 @@
 """Shared colour choices for the visual renderers.
 
 Centralised so the static image and the interactive HTML stay in lockstep:
-the depth heatmap uses seaborn's **mako** colormap (dark = shallow coverage,
-light = deep), and the secondary-structure cartoon uses one colour per element
+the depth heatmap uses seaborn's **mako_r** colormap (light = shallow coverage,
+dark = deep), and the secondary-structure cartoon uses one colour per element
 (helix / strand).
 """
 
@@ -26,4 +26,4 @@ def depth_cmap() -> Colormap:
     """
     import seaborn as sns
 
-    return sns.color_palette("mako", as_cmap=True)
+    return sns.color_palette("mako_r", as_cmap=True)
