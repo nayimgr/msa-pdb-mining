@@ -168,8 +168,7 @@ data files keep **all** rows. `results/` is gitignored; `results/p53`, `results/
 
 ## Repo facts
 
-- **Not a git repository** (`git status` fails). No remote, no CI. If version control is
-  wanted, `git init` first.
+- Git repository, hosted at `nayimgr/msa-pdb-mining` on GitHub. No CI configured.
 - `.gitignore` excludes `.venv/`, `__pycache__/`, `*.egg-info/`, `results/`, `.pytest_cache/`.
 - `.claude/settings.local.json` pre-allows the `pip install`, `pytest -q`, and
   `msa-pdb-mining` Bash invocations.
